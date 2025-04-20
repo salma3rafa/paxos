@@ -1,0 +1,51 @@
+version: '3.10'
+services:
+  node1:
+    build: ./node
+    ports:
+      - "5001:5000"
+    environment:
+      - NODE_ID=1
+      - PEERS=node2,node3,node4,node5
+    volumes:
+      - ./node:/app
+
+  node2:
+    build: ./node
+    ports:
+      - "5002:5000"
+    environment:
+      - NODE_ID=2
+      - PEERS=node1,node3,node4,node5
+    volumes:
+      - ./node:/app
+
+  node3:
+    build: ./node
+    ports:
+      - "5003:5000"
+    environment:
+      - NODE_ID=3
+      - PEERS=node1,node2,node4,node5
+    volumes:
+      - ./node:/app
+
+  node4:
+    build: ./node
+    ports:
+      - "5004:5000"
+    environment:
+      - NODE_ID=4
+      - PEERS=node1,node2,node3,node5
+    volumes:
+      - ./node:/app
+
+  node5:
+    build: ./node
+    ports:
+      - "5005:5000"
+    environment:
+      - NODE_ID=5
+      - PEERS=node1,node2,node3,node4
+    volumes:
+      - ./node:/app
