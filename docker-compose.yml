@@ -8,7 +8,9 @@ services:
       - NODE_ID=1
       - PEERS=node2,node3,node4,node5
     volumes:
-      - ./node:/app
+    - type: bind
+      source: ./node
+      target: /app
 
   node2:
     build: ./node
@@ -18,8 +20,9 @@ services:
       - NODE_ID=2
       - PEERS=node1,node3,node4,node5
     volumes:
-      - ./node:/app
-
+    - type: bind
+      source: ./node
+      target: /app
   node3:
     build: ./node
     ports:
@@ -28,7 +31,9 @@ services:
       - NODE_ID=3
       - PEERS=node1,node2,node4,node5
     volumes:
-      - ./node:/app
+    - type: bind
+      source: ./node
+      target: /app
 
   node4:
     build: ./node
@@ -38,7 +43,9 @@ services:
       - NODE_ID=4
       - PEERS=node1,node2,node3,node5
     volumes:
-      - ./node:/app
+    - type: bind
+      source: ./node
+      target: /app
 
   node5:
     build: ./node
@@ -48,4 +55,6 @@ services:
       - NODE_ID=5
       - PEERS=node1,node2,node3,node4
     volumes:
-      - ./node:/app
+    - type: bind
+      source: ./node
+      target: /app
