@@ -1,108 +1,121 @@
 from flask import Flask, request, jsonify
- 
-import os
-import threading
 import requests
-import time
-import random
+import os
 
 app = Flask(__name__)
 
+class PaxosNode:
+    def __init__(self, node_id, peers):
+        self.node_id = node_id
+        self.peers = peers
+        self.promised_id = None
+        self.accepted_id = None
+        self.accepted_value = None
+        self.proposal_id = 0
+        self.learned_value = None
 
-NODE_ID = int(os.environ['NODE_ID'])
-PEERS = os.environ['PEERS'].split(',')
+    def prepare(self, proposal_id):
+        if self.promised_id is None or proposal_id > self.promised_id:
+            self.promised_id = proposal_id
+            return True, self.accepted_id, self.accepted_value
+        return False, self.accepted_id, self.accepted_value
 
-# Paxos state
-promised_id = None
-accepted_id = None
-accepted_value = None
-learned_value = None
+    def accept(self, proposal_id, value):
+        if self.promised_id is None or proposal_id >= self.promised_id:
+            self.promised_id = proposal_id
+            self.accepted_id = proposal_id
+            self.accepted_value = value
+            return True
+        return False
 
-majority = (len(PEERS) + 1) 
+    def learn(self, value):
+        self.learned_value = value
 
-@app.route('/prepare', methods=['POST'])
-def prepare():
-    global promised_id
-    proposal_id = request.json['proposal_id']
-    if not promised_id or proposal_id > promised_id:
-        promised_id = proposal_id
-        return jsonify({'promise': True, 'accepted_id': accepted_id, 'accepted_value': accepted_value})
-    return jsonify({'promise': False})
+    def propose(self, value):
+        self.proposal_id += 1
+        proposal_id = self.proposal_id
+        promises = 0
+        accepted_values = []
 
-@app.route('/accept', methods=['POST'])
-def accept():
-    global promised_id, accepted_id, accepted_value
-    proposal_id = request.json['proposal_id']
-    value = request.json['value']
-    if not promised_id or proposal_id >= promised_id:
-        promised_id = proposal_id
-        accepted_id = proposal_id
-        accepted_value = value
-        return jsonify({'accepted': True})
-    return jsonify({'accepted': False})
+        for peer in self.peers:
+            try:
+                res = requests.post(f"http://{peer}/prepare", json={'proposal_id': proposal_id})
+                if res.status_code == 200 and res.json().get('promise'):
+                    promises += 1
+                    accepted = res.json()
+                    if accepted.get('accepted_value') is not None:
+                        accepted_values.append(accepted['accepted_value'])
+            except Exception as e:
+                print(f"Prepare request to {peer} failed: {e}")
 
-@app.route('/learn', methods=['POST'])
-def learn():
-    global learned_value
-    learned_value = request.json['value']
-    print(f"[Node {NODE_ID}] Learned value: {learned_value}")
-    return jsonify({'status': 'ok'})
+        if promises <= len(self.peers) // 2:
+            return False
 
-def send_to_node(node, endpoint, data):
-    try:
-        url = f'http://{node}:5000/{endpoint}'
-        res = requests.post(url, json=data, timeout=2)
-        return res.json()
-    except:
-        return None
+        if accepted_values:
+            value = accepted_values[0]
 
-def propose_value(value):
-    proposal_id = int(time.time() * 1000) + NODE_ID  # Unique proposal ID
-    promises = []
-    print(f"[Node {NODE_ID}] Starting proposal for value: {value} with id {proposal_id}")
+        accepts = 0
+        for peer in self.peers:
+            try:
+                res = requests.post(f"http://{peer}/accept", json={'proposal_id': proposal_id, 'value': value})
+                if res.status_code == 200 and res.json().get('accepted'):
+                    accepts += 1
+            except Exception as e:
+                print(f"Accept request to {peer} failed: {e}")
 
-    for peer in PEERS:
-        res = send_to_node(peer, 'prepare', {'proposal_id': proposal_id})
-        if res and res.get('promise'):
-            promises.append(res)
+        if accepts > len(self.peers) // 2:
+            for peer in self.peers:
+                try:
+                    requests.post(f"http://{peer}/learn", json={'value': value})
+                except Exception as e:
+                    print(f"Learn request to {peer} failed: {e}")
+            self.learn(value)
+            return True
 
-    if len(promises) + 1 >= majority:
-        # Use highest accepted_value if exists
-        highest = max((p for p in promises if p['accepted_id']), default=None, key=lambda x: x['accepted_id'] or 0)
-        if highest and highest['accepted_value']:
-            value = highest['accepted_value']
+        return False
 
-        acks = []
-        for peer in PEERS:
-            res = send_to_node(peer, 'accept', {'proposal_id': proposal_id, 'value': value})
-            if res and res.get('accepted'):
-                acks.append(res)
+# Get node ID and peers from environment
+node_id = int(os.getenv("NODE_ID", 1))
+peers_env = os.getenv("PEERS", "")
+peers = [f"{peer}:5000" for peer in peers_env.split(",") if peer]
 
-        if len(acks) + 1 >= majority:
-            # Broadcast to learners
-            print(f"[Node {NODE_ID}] Consensus reached! Value: {value}")
-            for peer in PEERS:
-                send_to_node(peer, 'learn', {'value': value})
-            learned_value = value
-        else:
-            print(f"[Node {NODE_ID}] Accept phase failed")
-    else:
-        print(f"[Node {NODE_ID}] Prepare phase failed")
+node = PaxosNode(node_id, peers)
 
-@app.route('/propose', methods=['POST'])
-def propose():
-    value = request.json['value']
-    threading.Thread(target=propose_value, args=(value,)).start()
-    return jsonify({'status': 'proposal started'})
-
-@app.route('/')
-def index():
+@app.route("/")
+def home():
     return jsonify({
-        'node': NODE_ID,
-        'accepted_id': accepted_id,
-        'accepted_value': accepted_value,
-        'learned_value': learned_value
+        "node_id": node.node_id,
+        "learned_value": node.learned_value
     })
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+@app.route("/propose", methods=["POST"])
+def propose():
+    value = request.json.get("value")
+    success = node.propose(value)
+    return jsonify({"success": success})
+
+@app.route("/prepare", methods=["POST"])
+def prepare():
+    proposal_id = request.json.get("proposal_id")
+    promise, accepted_id, accepted_value = node.prepare(proposal_id)
+    return jsonify({
+        "promise": promise,
+        "accepted_id": accepted_id,
+        "accepted_value": accepted_value
+    })
+
+@app.route("/accept", methods=["POST"])
+def accept():
+    proposal_id = request.json.get("proposal_id")
+    value = request.json.get("value")
+    accepted = node.accept(proposal_id, value)
+    return jsonify({"accepted": accepted})
+
+@app.route("/learn", methods=["POST"])
+def learn():
+    value = request.json.get("value")
+    node.learn(value)
+    return jsonify({"learned": True})
+
+if __name__ == "__main__":
+    app.run(debug=True,host="0.0.0.0", port=5000)
